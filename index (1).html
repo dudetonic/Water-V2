@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>AquaRemind — Hydration Reminder</title>
+  <meta name="description" content="AquaRemind reminds you to drink water throughout the day with beautiful notifications and tracks your hydration." />
+  <meta name="theme-color" content="#0a192f" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Ambient animated background droplets (populated by JS) -->
+  <div class="droplets" id="droplets" aria-hidden="true"></div>
+
+  <!-- Soft wave divider at the bottom of the viewport -->
+  <div class="bg-waves" aria-hidden="true">
+    <svg viewBox="0 0 1440 120" preserveAspectRatio="none">
+      <path d="M0,60 C240,120 480,0 720,50 C960,100 1200,20 1440,70 L1440,120 L0,120 Z"></path>
+    </svg>
+  </div>
+
+  <div class="page">
+    <!-- ============ HEADER ============ -->
+    <header class="app-header glass">
+      <div class="logo">
+        <svg class="logo-drop" viewBox="0 0 24 24" aria-hidden="true">
+          <defs>
+            <linearGradient id="dropGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4facfe" />
+              <stop offset="100%" stop-color="#00f2fe" />
+            </linearGradient>
+          </defs>
+          <path fill="url(#dropGrad)" d="M12 2C12 2 5 10.5 5 15a7 7 0 0 0 14 0C19 10.5 12 2 12 2z" />
+          <path fill="rgba(255,255,255,.45)" d="M9.2 14.5a3.4 3.4 0 0 0 2.4 4.1c.5.1.7-.6.2-.8a2.6 2.6 0 0 1-1.8-3.1c.1-.5-.6-.7-.8-.2z" />
+        </svg>
+        <h1>AquaRemind</h1>
+      </div>
+      <div class="header-right">
+        <span class="date-label" id="dateLabel"></span>
+        <button class="icon-btn" id="themeQuickBtn" aria-label="Toggle dark / light mode" title="Toggle theme">
+          <span class="theme-icon">🌙</span>
+        </button>
+        <button class="icon-btn" id="settingsBtn" aria-label="Open settings" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ============ MAIN CARD ============ -->
+    <main class="app-card glass" id="mainCard">
+
+      <!-- Celebration confetti layer -->
+      <div class="confetti" id="confetti" aria-hidden="true"></div>
+      <div class="goal-banner" id="goalBanner" role="status">
+        🏆 Goal reached! You're a hydration hero!
+      </div>
+
+      <!-- Hero: animated glass + progress ring -->
+      <section class="hero" aria-label="Daily hydration progress">
+        <div class="glass-cup" id="glassCup" aria-hidden="true">
+          <div class="water" id="waterFill">
+            <div class="wave wave1"></div>
+            <div class="wave wave2"></div>
+            <div class="bubbles">
+              <span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <div class="cup-shine"></div>
+        </div>
+
+        <div class="ring-wrap" role="img" aria-label="Progress toward daily goal">
+          <svg viewBox="0 0 120 120">
+            <defs>
+              <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#00c6ff" />
+                <stop id="ringStop" offset="15%" stop-color="#00c6ff" />
+                <stop offset="100%" stop-color="#00d9a3" />
+              </linearGradient>
+            </defs>
+            <circle class="ring-bg" cx="60" cy="60" r="52" />
+            <circle class="ring-fg" id="ringFg" cx="60" cy="60" r="52" />
+          </svg>
+          <div class="ring-label">
+            <span id="pctLabel">0%</span>
+            <small>of goal</small>
+          </div>
+        </div>
+      </section>
+
+      <!-- Countdown -->
+      <section class="countdown-card" aria-live="off">
+        <div class="countdown" id="countdown">--:--</div>
+        <div class="countdown-sub" id="countdownSub">until next reminder</div>
+      </section>
+
+      <!-- Intake stats -->
+      <section class="stats-grid">
+        <div class="stat glass">
+          <span class="stat-value" id="intakeAmount">0 ml</span>
+          <span class="stat-label">drunk today</span>
+        </div>
+        <div class="stat glass">
+          <span class="stat-value" id="remainingAmount">2000 ml</span>
+          <span class="stat-label">remaining</span>
+        </div>
+        <div class="stat glass">
+          <span class="stat-value" id="glassesCount">0</span>
+          <span class="stat-label">glasses</span>
+        </div>
+        <div class="stat glass">
+          <span class="stat-value" id="streakCount">0 🔥</span>
+          <span class="stat-label">day streak</span>
+        </div>
+      </section>
+
+      <!-- Quick add -->
+      <section class="quick-add" aria-label="Quick add water">
+        <button class="chip-btn quick-add-btn" data-ml="250">+250 ml</button>
+        <button class="chip-btn quick-add-btn" data-ml="500">+500 ml</button>
+        <button class="chip-btn quick-add-btn" data-ml="750">+750 ml</button>
+        <button class="chip-btn quick-add-btn" data-ml="1000">+1 L</button>
+        <div class="custom-add">
+          <input type="number" id="customAmount" min="1" max="5000" step="50" placeholder="Custom ml" aria-label="Custom amount in milliliters" />
+          <button class="chip-btn" id="customAddBtn">Add</button>
+        </div>
+      </section>
+
+      <!-- Big log button -->
+      <button class="btn-primary" id="drankBtn">I drank water 💧</button>
+
+      <!-- Secondary actions -->
+      <div class="actions-row">
+        <button class="btn-secondary" id="testBtn">🔔 Test notification</button>
+        <button class="btn-secondary" id="settingsBtn2">⚙️ Settings</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- ============ SETTINGS DRAWER ============ -->
+  <div class="overlay" id="overlay" hidden></div>
+  <aside class="drawer glass" id="drawer" role="dialog" aria-modal="true" aria-label="Settings" hidden>
+    <div class="drawer-header">
+      <h2>Settings</h2>
+      <button class="icon-btn" id="closeDrawerBtn" aria-label="Close settings">✕</button>
+    </div>
+
+    <div class="drawer-body">
+      <!-- Toggles -->
+      <section class="setting-section">
+        <h3>General</h3>
+        <label class="switch-row">
+          <span>Notifications</span>
+          <span class="switch">
+            <input type="checkbox" id="notifToggle" />
+            <span class="slider-ui"></span>
+          </span>
+        </label>
+        <p class="perm-note" id="permNote" hidden>
+          🚫 Notifications are blocked. Re-enable them in your browser's site settings
+          (click the lock icon in the address bar → Permissions → Notifications → Allow), then reload.
+        </p>
+        <label class="switch-row">
+          <span>Reminder sound</span>
+          <span class="switch">
+            <input type="checkbox" id="soundToggle" />
+            <span class="slider-ui"></span>
+          </span>
+        </label>
+        <label class="switch-row">
+          <span>Dark mode</span>
+          <span class="switch">
+            <input type="checkbox" id="themeToggle" />
+            <span class="slider-ui"></span>
+          </span>
+        </label>
+        <label class="switch-row">
+          <span>Pause reminders when goal met</span>
+          <span class="switch">
+            <input type="checkbox" id="pauseGoalToggle" />
+            <span class="slider-ui"></span>
+          </span>
+        </label>
+      </section>
+
+      <!-- Reminder interval -->
+      <section class="setting-section">
+        <h3>Reminder interval</h3>
+        <div class="interval-label" id="intervalLabel">Every 30 minutes</div>
+        <input type="range" id="intervalSlider" min="10" max="120" step="5" value="30"
+               aria-label="Reminder interval in minutes" />
+        <div class="range-marks"><span>10</span><span>120 min</span></div>
+        <div class="inline-input">
+          <label for="intervalInput">Exact value:</label>
+          <input type="number" id="intervalInput" min="10" max="120" step="1" value="30" />
+        </div>
+        <p class="hint" id="intervalHint" role="alert"></p>
+        <div class="presets" role="group" aria-label="Quick interval presets">
+          <button class="chip-btn preset" data-min="10">10m</button>
+          <button class="chip-btn preset" data-min="15">15m</button>
+          <button class="chip-btn preset" data-min="30">30m</button>
+          <button class="chip-btn preset" data-min="45">45m</button>
+          <button class="chip-btn preset" data-min="60">60m</button>
+          <button class="chip-btn preset" data-min="90">90m</button>
+          <button class="chip-btn preset" data-min="120">120m</button>
+        </div>
+      </section>
+
+      <!-- Active hours -->
+      <section class="setting-section">
+        <h3>Active hours</h3>
+        <div class="hours-row">
+          <select id="startHourSel" aria-label="Start hour"></select>
+          <span>to</span>
+          <select id="endHourSel" aria-label="End hour"></select>
+        </div>
+        <p class="hint subtle">No reminders outside this window.</p>
+      </section>
+
+      <!-- Daily goal -->
+      <section class="setting-section">
+        <h3>Daily goal</h3>
+        <div class="inline-input">
+          <input type="number" id="goalInput" min="500" max="10000" step="100" value="2000" aria-label="Daily goal in milliliters" />
+          <span>ml / day</span>
+        </div>
+      </section>
+
+      <!-- Data -->
+      <section class="setting-section">
+        <h3>Data</h3>
+        <div class="actions-col">
+          <button class="btn-secondary" id="exportBtn">⬇️ Export history (JSON)</button>
+          <button class="btn-secondary danger" id="resetBtn">🗑️ Reset / clear all data</button>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Toasts -->
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
