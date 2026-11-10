@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS = {
   sound: true,           // Web Audio chime on reminder
   notificationsEnabled: false,
   pauseOnGoalMet: true,  // stop reminding once goal is reached
+  wakeLock: false,       // keep screen awake (avoids hidden-tab timer throttling)
   theme: null            // null = follow prefers-color-scheme
 };
 
@@ -199,6 +200,8 @@ async function enableNotifications() {
   if (Notification.permission === 'granted') {
     settings.notificationsEnabled = true;
     saveSettings(); broadcastState();
+    registerPeriodicSync();
+    syncScheduleToCache();
     toast('Notifications enabled! 💧', 'success');
     return true;
   }
@@ -215,6 +218,7 @@ async function enableNotifications() {
     settings.notificationsEnabled = true;
     saveSettings(); broadcastState();
     toast('Notifications enabled! 💧', 'success');
+    registerPeriodicSync();
     scheduleNextReminder(settings.interval * 60000);
     return true;
   }
@@ -246,6 +250,7 @@ function syncNotifUI() {
 function scheduleNextReminder(delayMs) {
   nextReminderTime = Date.now() + delayMs;
   Store.set(KEYS.NEXT_REMINDER, nextReminderTime);
+  syncScheduleToCache(); // keep the service worker's copy in sync
   updateCountdown();
 }
 
@@ -304,12 +309,14 @@ function remindersArmed() {
  * The Date.now() vs persisted timestamp comparison means reloads,
  * device sleep and throttled background tabs can never skip or double-fire.
  */
+let dueCheckRunning = false;
+
 function tick() {
   rolloverCheck();
 
   // Mid-session permission revocation → disarm gracefully.
   if (settings.notificationsEnabled &&
-      'Notification' in window && Notification.permission === 'denied') {
+    'Notification' in window && Notification.permission === 'denied') {
     settings.notificationsEnabled = false;
     saveSettings();
     syncNotifUI();
@@ -320,8 +327,23 @@ function tick() {
     scheduleNextReminder(settings.interval * 60000);
   }
 
-  const now = Date.now();
-  if (now >= nextReminderTime) {
+  updateCountdown();
+  checkDueAndFire(); // async: adopts SW-fired reminders first, never double-fires
+}
+
+/**
+ * Decide whether a reminder is due. Runs async so the schedule written by
+ * the service worker (Periodic Background Sync) is adopted BEFORE the due
+ * check — this is what prevents a duplicate reminder when the tab wakes up.
+ */
+async function checkDueAndFire() {
+  if (dueCheckRunning) return; // don't overlap checks
+  dueCheckRunning = true;
+  try {
+    await syncScheduleFromCache();
+    const now = Date.now();
+    if (now < nextReminderTime) return;
+
     if (!remindersArmed()) {
       scheduleNextReminder(settings.interval * 60000); // stay paused but keep clock fresh
     } else if (settings.pauseOnGoalMet && today.goalMet) {
@@ -331,9 +353,9 @@ function tick() {
     } else {
       scheduleNextReminder(msUntilWindowStart()); // wait for the window to open
     }
+  } finally {
+    dueCheckRunning = false;
   }
-
-  updateCountdown();
 }
 
 /** Render the live countdown (h:mm:ss or m:ss), pulsing every second. */
@@ -565,6 +587,7 @@ function applyInterval(raw, { announce = true } = {}) {
   syncIntervalUI();
   if (changed) {
     scheduleNextReminder(v * 60000); // restart countdown with new interval
+    registerPeriodicSync();        // update the background-sync interval too
     broadcastState();
     if (announce) toast(`Reminders set to every ${v} minutes 💧`, 'success');
   }
@@ -700,6 +723,119 @@ function registerSW() {
 }
 
 /* ============================================================
+   BACKGROUND RELIABILITY
+   Service workers can't read localStorage or run timers, so the
+   page mirrors its schedule into the Cache API; Periodic Background
+   Sync (Chromium, installed PWA) wakes the SW to fire due reminders.
+   ============================================================ */
+
+const SW_CACHE = 'aquaremind-v1';
+const SCHEDULE_URL = '/aqua-schedule';
+let lastScheduleSeenAt = 0;
+
+/**
+ * Write the current schedule into the Cache API so the service worker
+ * can read it during Periodic Background Sync checks.
+ */
+async function syncScheduleToCache() {
+  if (!('caches' in window)) return;
+  try {
+    const cache = await caches.open(SW_CACHE);
+    await cache.put(SCHEDULE_URL, new Response(JSON.stringify({
+      enabled: remindersArmed(),
+      permission: 'Notification' in window ? Notification.permission : 'unsupported',
+      interval: settings.interval,
+      startHour: settings.startHour,
+      endHour: settings.endHour,
+      nextReminderTime: nextReminderTime || Date.now() + settings.interval * 60000,
+      lastNotifiedAt: Store.get(KEYS.LAST_NOTIFIED, 0),
+      message: pickMessage(),
+      updatedAt: Date.now()
+    })));
+  } catch { /* cache unavailable — non-fatal */ }
+}
+
+/**
+ * Adopt the schedule written by the service worker. If the SW fired a
+ * reminder while this tab was hidden/closed, we take over its timestamps
+ * — that is the duplicate-prevention link between the two contexts.
+ */
+async function syncScheduleFromCache() {
+  if (!('caches' in window)) return;
+  try {
+    const resp = await caches.match(SCHEDULE_URL);
+    if (!resp) return;
+    const s = await resp.json();
+    if (!s.updatedAt || s.updatedAt <= lastScheduleSeenAt) return;
+    lastScheduleSeenAt = s.updatedAt;
+    if ((s.lastNotifiedAt || 0) > Store.get(KEYS.LAST_NOTIFIED, 0)) {
+      Store.set(KEYS.LAST_NOTIFIED, s.lastNotifiedAt);
+      lastFireAt = s.lastNotifiedAt;
+    }
+    if (s.nextReminderTime && s.nextReminderTime !== nextReminderTime) {
+      nextReminderTime = s.nextReminderTime;
+      Store.set(KEYS.NEXT_REMINDER, s.nextReminderTime);
+    }
+  } catch { /* ignore — foreground schedule still authoritative */ }
+}
+
+/**
+ * Ask Chromium to wake the service worker every `interval` to check for
+ * due reminders. Requires the PWA to be installed + permission granted;
+ * Firefox/Safari lack this API and silently keep the foreground fallback.
+ */
+async function registerPeriodicSync() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (!('periodicSync' in reg)) return;
+    const status = await navigator.permissions.query({ name: 'periodic-background-sync' }).catch(() => null);
+    if (status && status.state !== 'granted') return;
+    await reg.periodicSync.register('check-reminders', {
+      minInterval: settings.interval * 60000
+    });
+  } catch { /* not installed / not granted — foreground timing still works */ }
+}
+
+async function unregisterPeriodicSync() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if ('periodicSync' in reg) await reg.periodicSync.unregister('check-reminders');
+  } catch { /* ignore */ }
+}
+
+/* ---------- Wake Lock (optional keep-alive) ----------
+   Keeps the screen awake so hidden-tab timer throttling can't delay
+   reminders. Only helps while the screen is on and the tab is open. */
+
+let wakeLock = null;
+
+async function setWakeLock(on) {
+  if (!('wakeLock' in navigator)) {
+    toast('Keep-awake is not supported in this browser', 'error');
+    return false;
+  }
+  try {
+    if (on) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => {
+        wakeLock = null;
+        if (settings.wakeLock) {
+          settings.wakeLock = false;
+          $('wakeLockToggle').checked = false;
+          saveSettings();
+        }
+      });
+      return true;
+    }
+    if (wakeLock) { await wakeLock.release(); wakeLock = null; }
+    return true;
+  } catch {
+    toast('Could not keep the screen awake', 'error');
+    return false;
+  }
+}
+
+/* ============================================================
    10. INIT & EVENT WIRING
    ============================================================ */
 
@@ -753,6 +889,8 @@ function wireEvents() {
     } else {
       settings.notificationsEnabled = false;
       saveSettings(); broadcastState();
+      unregisterPeriodicSync();
+      syncScheduleToCache();
       toast('Reminders paused ⏸');
       updateCountdown();
     }
@@ -769,6 +907,15 @@ function wireEvents() {
     settings.pauseOnGoalMet = e.target.checked;
     saveSettings(); broadcastState(); updateCountdown();
     toast(e.target.checked ? 'Reminders pause when goal is met 🏆' : 'Reminders always on 💧');
+  });
+  $('wakeLockToggle').addEventListener('change', async (e) => {
+    const ok = await setWakeLock(e.target.checked);
+    if (!ok) { e.target.checked = false; return; }
+    settings.wakeLock = e.target.checked;
+    saveSettings();
+    toast(e.target.checked
+      ? 'Screen stays awake while the app is open ☀️'
+      : 'Keep-awake off');
   });
 
   /* Interval: slider (live label on input, commit on change) */
@@ -801,7 +948,7 @@ function wireEvents() {
     const body = pickMessage();
     const shown = await showSystemNotification('💧 Test notification', { body });
     toast(shown ? 'Test notification sent! Check your system notifications 🔔'
-                : `💧 Test: ${body} (system notifications unavailable — toast shown)`, 'success');
+      : `💧 Test: ${body} (system notifications unavailable — toast shown)`, 'success');
   });
 
   /* Data */
@@ -810,7 +957,10 @@ function wireEvents() {
 
   /* Re-validate schedule the moment the tab becomes visible again */
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) tick();
+    if (document.hidden) return;
+    tick();
+    syncScheduleFromCache();                    // adopt any reminder the SW fired while hidden
+    if (settings.wakeLock) setWakeLock(true);   // wake locks auto-release when hidden
   });
   /* Follow OS theme changes when user hasn't picked a theme manually */
   darkMedia.addEventListener('change', () => { if (!settings.theme) applyTheme(); });
@@ -835,11 +985,16 @@ function init() {
     scheduleNextReminder(settings.interval * 60000);
   }
 
+  $('wakeLockToggle').checked = settings.wakeLock;
+  if (settings.wakeLock) setWakeLock(true);
+
   updateIntakeUI();
   updateCountdown();
   attachRipples();
   wireEvents();
   registerSW();
+  syncScheduleFromCache();
+  setInterval(syncScheduleFromCache, 30000); // adopt SW-fired reminders
 
   /* Heartbeat — foreground timing plus timestamp re-checks. */
   setInterval(tick, 1000);
